@@ -3,14 +3,21 @@ import re
 import traceback
 import requests
 import json
-from os import path, kill, getpid, getcwd
+from os import path, kill, getpid, getcwd, execv
+import os
+import sys
 from signal import SIGTERM
 from bs4 import BeautifulSoup as soup
-from datetime import datetime
+import datetime
 from colorama import Fore, Style
 from time import sleep
-from simple_youtube_api.Channel import Channel
-from simple_youtube_api.LocalVideo import LocalVideo
+import emoji
+import pickle
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from google.auth.transport.requests import Request
 
 
 #--instructions:
@@ -136,7 +143,6 @@ class Bot:
         try:
             self.Load_session_file(username)
             if self.Check_login(): return True
-            print(1)
             self.session.cookies.clear()
             self.session.params.clear()
             self.session.headers.clear()
@@ -280,32 +286,79 @@ cat_tags = ['funny cats','cute cats','funny cat','funny baby cats','cute cat','c
             'cute dogs','funny','cute baby','baby cats','funny animal videos','cute funny dogs','cute videos','cute puppies','baby cat','too cute','cats','cute','cutest animals']
 
 
-#--login to channel:  
-channel = Channel()
-channel.login('client_secret.json', 'credentials.storage')
-
-
-#--video location:
-video = LocalVideo(file_path=file_name+str('.mp4'))
+#--upload times: 
+now = datetime.datetime.today()
+tonight = (now.replace(hour=17, minute=0, second=0, microsecond=0)).isoformat() + '.000Z'
+tomorrow = (now.replace(hour=17, minute=0, second=0, microsecond=0) + datetime.timedelta(days=1)).isoformat() + '.000Z'
 
 
 #--video info:
 title = input('title: ')
 desc = input('description: ')
 
-video.set_title(title)
-video.set_description(desc)
-video.set_tags(cat_tags)
-video.set_default_language("en-US")
+
+#--api function:
+def Create_Service(client_secret_file, api_name, api_version, *scopes):
+    CLIENT_SECRET_FILE = client_secret_file
+    API_SERVICE_NAME = api_name
+    API_VERSION = api_version
+    SCOPES = [scope for scope in scopes[0]]
+
+    cred = None
+
+    pickle_file = f'token_{API_SERVICE_NAME}_{API_VERSION}.pickle'
+
+    if os.path.exists(pickle_file):
+        with open(pickle_file, 'rb') as token:
+            cred = pickle.load(token)
+
+    if not cred or not cred.valid:
+        if cred and cred.expired and cred.refresh_token:
+            cred.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+            cred = flow.run_local_server()
+
+        with open(pickle_file, 'wb') as token:
+            pickle.dump(cred, token)
+
+    try:
+        service = build(API_SERVICE_NAME, API_VERSION, credentials=cred)
+        return service
+    except Exception as e:
+        print('Unable to connect.')
+        print(e)
+        return None
 
 
-#--video setting:
-video.set_embeddable(True)
-video.set_license('creativeCommon')
-video.set_privacy_status('private')
-video.set_public_stats_viewable(True)
+#--api settings:
+client_secret_file = 'client_secret.json'
+API_NAME = 'youtube'
+API_VERSION = 'v3'
+SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+
+
+#--create service:
+service = Create_Service(client_secret_file, API_NAME, API_VERSION, SCOPES)
+
+
+#--setting video metadata:
+request_body = {
+    'snippet': {
+        'title': title,
+        'description': desc,
+        'tags': cat_tags
+    },
+    'status': {
+        'privacyStatus': 'private',
+        'publishAt': tomorrow,
+        'selfDeclaredMadeForKids': False, 
+    },
+    'notifySubscribers': False
+}
 
 
 #--upload video to youtube:
-video = channel.upload_video(video)
-print('video uploaded')
+upload_video = MediaFileUpload(file_name+str('.mp4'))
+response_upload = service.videos().insert(part='snippet,status', body=request_body, media_body=upload_video).execute()
+print('upload complete')
